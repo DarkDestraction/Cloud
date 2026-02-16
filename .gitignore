@@ -1,0 +1,29 @@
+# Local secrets and environment
+users.json
+app.py
+.env
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+
+# Ignore user data folders but keep example subfolders
+static/files/
+!static/files/example_user/
+!static/files/example_user/**
+
+static/gallery/
+!static/gallery/example_user/
+!static/gallery/example_user/**
+
+# Examples and public assets to include
+!cloud_backup.html
+!users-example.json
+!app.example.py
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+*.DS_Store

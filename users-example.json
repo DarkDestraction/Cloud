@@ -1,0 +1,10 @@
+{
+  "alice": {
+    "password": "<example-hash>",
+    "role": "user"
+  },
+  "admin": {
+    "password": "<example-hash>",
+    "role": "admin"
+  }
+}
