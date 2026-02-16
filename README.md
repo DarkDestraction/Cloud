@@ -14,7 +14,7 @@ Questo repository contiene il front-end statico dell'app MyCloud e riferimenti a
 - **Autenticazione UI:** schermata di login/registrazione gestita via chiamate a `/api/login` e `/api/logout`.
 - **Interazione con il back-end:** il front-end si aspetta gli endpoint REST sotto il prefisso `/api/*` (vedi sezione Back-end). Gli URL statici di preview sono serviti da `/static/files/<user>/...` e `/static/gallery/<user>/...`.
 
-**Back-End (sintesi, NON caricare su GitHub)**
+**Back-End**
 - File: app.py — server Flask che espone gli endpoint usati dal front-end.
 - Endpoint principali (riassunto):
   - `GET /api/files` — restituisce l'albero delle cartelle dell'utente.
