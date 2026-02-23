@@ -2986,18 +2986,16 @@
         async function logout() {
             await fetch('/api/logout', { method: 'POST' });
 
+            // show home **before** clearing the user flag; otherwise
+            // showSection will call showLogin and bail out.
+            showSection('home');
+
             loggedUser = null;
 
             // ⬇️ SVUOTA I CAMPI LOGIN
             document.getElementById('login-user').value = '';
             document.getElementById('login-pass').value = '';
             document.getElementById('login-error').textContent = '';
-
-            // ⬇️ NASCONDI TUTTA L’APP
-            document.querySelector('.nav-tabs').style.visibility = 'hidden';
-            document.getElementById('home-section').classList.add('hidden');
-            document.getElementById('files-section').classList.add('hidden');
-            document.getElementById('gallery-section').classList.add('hidden');
 
             // ⬇️ MOSTRA LOGIN
             showLogin();
