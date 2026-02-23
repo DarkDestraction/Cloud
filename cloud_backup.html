@@ -1857,10 +1857,10 @@
             setTimeout(()=>toast.remove(), 3000);
         }
 
-        // Toast con progresso per upload
-        function showUploadProgress(current, total, fileName) {
+        // Toast con progresso per upload (bytes anziché conteggio file)
+        function showUploadProgress(currentBytes, totalBytes, fileName) {
             let toast = document.getElementById('upload-progress-toast');
-            
+
             if (!toast) {
                 const container = document.getElementById('toast-container');
                 toast = document.createElement('div');
@@ -1868,9 +1868,18 @@
                 toast.className = 'toast upload-progress';
                 container.appendChild(toast);
             }
-            
-            const percent = Math.round((current / total) * 100);
-            
+
+            const percent = totalBytes > 0 ? Math.round((currentBytes / totalBytes) * 100) : 0;
+
+            // helper to format byte sizes (KB/MB/GB)
+            const format = bytes => {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B','KB','MB','GB','TB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+            };
+
             toast.innerHTML = `
                 <div class="upload-progress-content">
                     <div class="progress-circle">
@@ -1882,12 +1891,12 @@
                         <div class="progress-text">${percent}%</div>
                     </div>
                     <div class="upload-info">
-                        <div class="upload-counter">${current}/${total}</div>
+                        <div class="upload-counter">${format(currentBytes)}/${format(totalBytes)}</div>
                         <div class="upload-filename">${fileName}</div>
                     </div>
                 </div>
             `;
-            
+
             return toast;
         }
 
@@ -1925,7 +1934,8 @@
 
             // Batch delete per file/cartelle selezionate
             if(type === 'files' && selectedItems.size > 0) {
-                const confirmed = confirm(`Eliminare ${selectedItems.size} elemento/i?`);
+                const deleteCount = selectedItems.size; // save before clearing
+                const confirmed = confirm(`Eliminare ${deleteCount} elemento/i?`);
                 if(!confirmed) return;
                 
                 for(const key of selectedItems) {
@@ -1935,14 +1945,26 @@
                 }
                 
                 clearSelection();
-                showToast(`${selectedItems.size} elemento/i eliminati`);
+                showToast(`${deleteCount} elemento/i eliminati`);
             } else if(type==='file' || type==='folder'){
+                // single file/folder deletion
                 let url = `/api/files/delete?path=${encodeURIComponent([...path,name].join('/'))}`;
                 await fetch(url,{method:'POST'});
+                // remove from selection if present
+                const key = `${type}:${name}`;
+                if(selectedItems.has(key)){
+                    selectedItems.delete(key);
+                    updateFileActionButtons();
+                }
+                showToast(`1 elemento eliminato`);
             } else if(type==='photo'){
                 // delete photo
-                let url = `/static/gallery/${name}`;
                 await fetch(`/api/gallery/delete?file=${encodeURIComponent(name)}`,{method:'POST'});
+                if(selectedPhotos.has(name)){
+                    selectedPhotos.delete(name);
+                    updateGalleryActionButtons();
+                }
+                showToast(`1 foto/video eliminata`);
             }
             
             await fetchFileTree();
@@ -1996,34 +2018,104 @@
             fileTree = await res.json();
         }
 
+        // helper che invia un singolo file via XMLHttpRequest per monitorare i byte caricati
+        // se viene fornito relPath (relative path all'interno della cartella), usa l'endpoint upload_folder
+        function uploadFileXHR(file, path, onProgress, relPath) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const url = relPath ?
+                    `/api/files/upload_folder?path=${encodeURIComponent(path)}` :
+                    `/api/files/upload?path=${encodeURIComponent(path)}`;
+                xhr.open('POST', url);
+                xhr.upload.onprogress = e => {
+                    if (e.lengthComputable) {
+                        onProgress(e.loaded);
+                    }
+                };
+                xhr.onload = () => {
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            if (data.success) resolve(data);
+                            else reject(data.error || 'upload error');
+                        } catch (err) {
+                            reject(err);
+                        }
+                    } else {
+                        reject(xhr.statusText);
+                    }
+                };
+                xhr.onerror = () => reject(xhr.statusText);
+                const form = new FormData();
+                if (relPath) {
+                    // upload folder sends files[] with relative path as filename
+                    form.append('files[]', file, relPath);
+                } else {
+                    form.append('file', file);
+                }
+                xhr.send(form);
+            });
+        }
+
+        // helper più generico usato per la gallery: basta fornire l'URL completo
+        function uploadXHR(file, url, onProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', url);
+                xhr.upload.onprogress = e => {
+                    if (e.lengthComputable) {
+                        onProgress(e.loaded);
+                    }
+                };
+                xhr.onload = () => {
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            if (data.success) resolve(data);
+                            else reject(data.error || 'upload error');
+                        } catch (err) {
+                            reject(err);
+                        }
+                    } else {
+                        reject(xhr.statusText);
+                    }
+                };
+                xhr.onerror = () => reject(xhr.statusText);
+                const form = new FormData();
+                form.append('file', file);
+                xhr.send(form);
+            });
+        }
+
         async function uploadFiles(e){
             try {
                 const files = e.target.files;
                 if (!files || files.length === 0) return;
-                
-                const fileCount = files.length;
+                const fileCount = files.length; // memorizza prima di resettare input
+
                 const savedPath = [...currentPath];
+
+                // Calcola totale byte
+                const totalBytes = Array.from(files).reduce((sum, f) => sum + f.size, 0);
+                let uploadedBytes = 0;
 
                 // Upload file uno alla volta con progresso
                 for (let i = 0; i < fileCount; i++) {
                     const file = files[i];
-                    showUploadProgress(i + 1, fileCount, file.name);
-                    
-                    const form = new FormData();
-                    form.append('file', file);
+                    // quando parte il file mostriamo il nome con la progressione
+                    showUploadProgress(uploadedBytes, totalBytes, file.name);
 
-                    const res = await fetch(`/api/files/upload?path=${encodeURIComponent(currentPath.join('/'))}`, {
-                        method: 'POST',
-                        body: form
-                    });
-
-                    const data = await res.json();
-
-                    if (!data.success) {
+                    try {
+                        await uploadFileXHR(file, currentPath.join('/'), bytes => {
+                            showUploadProgress(uploadedBytes + bytes, totalBytes, file.name);
+                        });
+                    } catch (err) {
                         removeUploadProgress();
-                        showToast(data.error || `Errore upload ${file.name}`, 'error');
+                        showToast(`Errore upload ${file.name}`, 'error');
                         return;
                     }
+
+                    uploadedBytes += file.size;
                 }
 
                 removeUploadProgress();
@@ -2046,33 +2138,31 @@
             try {
                 const files = e.target.files;
                 if (!files || !files.length) return;
-                
                 const fileCount = files.length;
+
                 const savedPath = [...currentPath];
+
+                // calcola totale byte
+                const totalBytes = Array.from(files).reduce((sum, f) => sum + f.size, 0);
+                let uploadedBytes = 0;
 
                 // Upload file della cartella uno alla volta con progresso
                 for (let i = 0; i < fileCount; i++) {
                     const file = files[i];
-                    showUploadProgress(i + 1, fileCount, file.webkitRelativePath || file.name);
+                    showUploadProgress(uploadedBytes, totalBytes, file.webkitRelativePath || file.name);
                     
-                    const form = new FormData();
-                    form.append('files[]', file, file.webkitRelativePath);
-
-                    const res = await fetch(
-                        `/api/files/upload_folder?path=${encodeURIComponent(currentPath.join('/'))}`,
-                        {
-                            method: 'POST',
-                            body: form
-                        }
-                    );
-
-                    const data = await res.json();
-
-                    if (!data.success) {
+                    // invio tramite XHR per il tracking (include percorso relativo)
+                    try {
+                        await uploadFileXHR(file, currentPath.join('/'), bytes => {
+                            showUploadProgress(uploadedBytes + bytes, totalBytes, file.webkitRelativePath || file.name);
+                        }, file.webkitRelativePath || file.name);
+                    } catch (err) {
                         removeUploadProgress();
-                        showToast(data.error || `Errore upload ${file.name}`, 'error');
+                        showToast(`Errore upload ${file.name}`, 'error');
                         return;
                     }
+
+                    uploadedBytes += file.size;
                 }
 
                 removeUploadProgress();
@@ -2328,29 +2418,27 @@
             try {
                 const files = e.target.files;
                 if (!files || !files.length) return;
-                
-                const fileCount = files.length;
 
-                // Upload foto una alla volta con progresso
-                for (let i = 0; i < fileCount; i++) {
+                // totale byte e contatore
+                const totalBytes = Array.from(files).reduce((sum,f)=>sum+f.size,0);
+                let uploadedBytes = 0;
+
+                // Upload foto una alla volta con progresso reale
+                for (let i = 0; i < files.length; i++) {
                     const file = files[i];
-                    showUploadProgress(i + 1, fileCount, file.name);
-                    
-                    const form = new FormData();
-                    form.append('file', file);
+                    showUploadProgress(uploadedBytes, totalBytes, file.name);
 
-                    const res = await fetch('/api/gallery/upload', {
-                        method: 'POST',
-                        body: form
-                    });
-
-                    const data = await res.json();
-
-                    if (!data.success) {
+                    try {
+                        await uploadXHR(file, '/api/gallery/upload', bytes => {
+                            showUploadProgress(uploadedBytes + bytes, totalBytes, file.name);
+                        });
+                    } catch (err) {
                         removeUploadProgress();
-                        showToast(data.error || `Errore upload ${file.name}`, 'error');
+                        showToast(`Errore upload ${file.name}`, 'error');
                         return;
                     }
+
+                    uploadedBytes += file.size;
                 }
 
                 removeUploadProgress();
@@ -2358,7 +2446,7 @@
                 await fetchFileTree();
                 await loadGallery();
                 await updateQuotaBar();
-                showToast(`${fileCount} foto caricate con successo!`);
+                showToast(`${files.length} foto caricate con successo!`);
             } catch (error) {
                 console.error('Upload gallery error:', error);
                 removeUploadProgress();
